@@ -99,6 +99,7 @@ def main():
         fp16=config.BNB_4BIT_COMPUTE_DTYPE == torch.float16,
         bf16=config.BNB_4BIT_COMPUTE_DTYPE == torch.bfloat16,
         seed=config.SEED,
+        max_grad_norm=config.MAX_GRAD_NORM,
     )
 
     callbacks = []
@@ -113,8 +114,7 @@ def main():
         eval_dataset=val_dataset,
         tokenizer=tokenizer,
         compute_metrics=compute_metrics,
-        callbacks=callbacks,
-        max_grad_norm=config.MAX_GRAD_NORM,
+        callbacks=callbacks
     )
 
     print("Starting training...")
