@@ -1,0 +1,13 @@
+/cs162-final-dev
+/saved_models
+/wandb
+/wandb_cache
+/wandb_cache_dir
+/wandb_dir
+/wandb_logs
+/wandb_logs_dir
+__pycache__/
+
+env.sh
+
+

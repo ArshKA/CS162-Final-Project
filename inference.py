@@ -16,6 +16,7 @@ def load_model_for_inference(adapter_path: str):
     tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+        print(f"Tokenizer: pad_token set to '{tokenizer.pad_token}' (ID: {tokenizer.pad_token_id})")
     quantization_config_inf = None
     if config.USE_4BIT_QUANTIZATION:
         quantization_config_inf = BitsAndBytesConfig(
@@ -34,6 +35,20 @@ def load_model_for_inference(adapter_path: str):
         device_map="auto",
         trust_remote_code=True,
     )
+
+    # Ensure the model's config also reflects the pad_token_id used by the tokenizer
+    if tokenizer.pad_token_id is not None:
+        if base_model.config.pad_token_id is None:
+            base_model.config.pad_token_id = tokenizer.pad_token_id
+            print(f"Base Model: model.config.pad_token_id was None, explicitly set to {tokenizer.pad_token_id}")
+        elif base_model.config.pad_token_id != tokenizer.pad_token_id:
+            # If there's a mismatch, prioritize the tokenizer's pad_token_id as it's used for input preparation
+            print(f"Warning: base_model.config.pad_token_id ({base_model.config.pad_token_id}) differs from tokenizer.pad_token_id ({tokenizer.pad_token_id}). Overwriting model's config with tokenizer's pad_token_id.")
+            base_model.config.pad_token_id = tokenizer.pad_token_id
+    else:
+        # This scenario implies an issue with the tokenizer's eos_token or its setup, which is unlikely with standard Hugging Face tokenizers but worth noting.
+        print("Warning: tokenizer.pad_token_id is None after attempting to set pad_token. The model may still encounter issues with batch processing if padding is required.")
+
     model = PeftModel.from_pretrained(base_model, adapter_path)
     model.eval()
     return model, tokenizer
@@ -217,3 +232,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+python inference.py --mode predict --model_path saved_models/mistral_raid_detector_adapter/checkpoint-500 "I am a human" "I am an AI-generated text" "I'm a human" "This is human text lol"
+python inference.py --mode evaluate --dev_data_path cs162-final-dev/ --model_path saved_models/mistral_raid_detector_adapter/checkpoint-500
+"""
