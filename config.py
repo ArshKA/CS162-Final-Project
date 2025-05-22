@@ -1,6 +1,6 @@
 import torch
 
-MODEL_NAME = "mistralai/Mistral-7B-v0.1"
+MODEL_NAME = "Qwen/Qwen3-4B"
 
 DATASET_NAME = "liamdugan/raid"
 DATASET_SPLIT = "train"
@@ -12,8 +12,8 @@ SUBSAMPLE_STRATEGY = "balanced_human_ai"
 
 MAX_LENGTH = 512
 
-OUTPUT_DIR = "./saved_models/mistral_raid_detector_adapter"
-LOGGING_DIR = "./wandb/detector-test"
+OUTPUT_DIR = "./saved_models/mistral_raid_detector_adapter_qwen3"
+LOGGING_DIR = "./wandb/detector-test-qwen3"
 NUM_EPOCHS = 5
 BATCH_SIZE = 8
 GRAD_ACCUMULATION_STEPS = 4
@@ -39,8 +39,10 @@ BNB_4BIT_COMPUTE_DTYPE = torch.bfloat16
 BNB_4BIT_QUANT_TYPE = "nf4"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SEED = 42
+SEED = 1
 TEST_SPLIT_SIZE = 0.1
 
 INFERENCE_MODEL_PATH = OUTPUT_DIR
 INFERENCE_BATCH_SIZE = 8
+
+MAX_EVAL_SAMPLES = 100  # Evaluate on 500 samples, or set to None to evaluate on all
