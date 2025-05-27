@@ -8,6 +8,8 @@ import json
 from tqdm import tqdm
 import random
 import config
+from datasets import load_dataset
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, f1_score
 
 def load_model_for_inference(adapter_path: str):
     print(f"Loading PEFT adapter from: {adapter_path}")
@@ -271,6 +273,81 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="cs162-final-dev/", outp
     except Exception as e:
         print(f"Error saving evaluation results to {output_filepath}: {e}")
 
+def normalize_hf_dataset(dataset, dataset_name):
+    """
+    Normalize HuggingFace dataset to a list of dicts for evaluation.
+    For AITextPile and TuringBench: map 'text' and 'label'.
+    For HC3: extract pairs of 'human_answers' and 'chatgpt_answers',
+    return list of dicts with 'human_text' and 'machine_text'.
+    """
+    normalized = []
+    if dataset_name in ["AITextPile", "TuringBench"]:
+        for ex in dataset:
+            text = ex.get("text")
+            label = ex.get("label")
+            if text is not None and label in [0, 1]:
+                normalized.append({"text": text, "label": label})
+    elif dataset_name == "HC3":
+        for ex in dataset:
+            human_answers = ex.get("human_answers")
+            chatgpt_answers = ex.get("chatgpt_answers")
+            # Both are expected to be lists of strings
+            if isinstance(human_answers, list) and isinstance(chatgpt_answers, list):
+                for h, m in zip(human_answers, chatgpt_answers):
+                    if isinstance(h, str) and isinstance(m, str):
+                        normalized.append({"human_text": h, "machine_text": m})
+    else:
+        raise ValueError(f"Unknown dataset_name for normalization: {dataset_name}")
+    return normalized
+
+def evaluate_on_hf_dataset(model, tokenizer, dataset_name: str, num_samples=None):
+    """
+    Evaluate model on a HuggingFace dataset. Normalizes to list of dicts with 'text' and 'label'.
+    Treats label==0 as human, 1 as machine. Computes accuracy, precision, recall, F1.
+    Prints and returns results in the same format as evaluate_on_dev_set().
+    """
+    print(f"\n--- Loading HuggingFace dataset: {dataset_name} ---")
+    # You may want to customize the split and field names for each dataset
+    dataset = load_dataset(dataset_name, split="test")
+    # Normalize to list of dicts with 'text' and 'label'
+    normalized = normalize_hf_dataset(dataset, dataset_name)
+    if num_samples is not None and num_samples > 0 and num_samples < len(normalized):
+        print(f"Randomly sampling {num_samples} examples from dataset...")
+        normalized = random.sample(normalized, num_samples)
+    elif num_samples is not None and num_samples >= len(normalized):
+        print(f"Requested {num_samples} samples, but dataset only has {len(normalized)}. Using all available.")
+    elif num_samples is not None and num_samples <= 0:
+        print(f"num_samples is {num_samples}, using all available.")
+    if not normalized:
+        print("No valid examples found in dataset for evaluation.")
+        return None
+    texts = [ex["text"] for ex in normalized]
+    labels = [ex["label"] for ex in normalized]
+    print(f"Predicting {len(texts)} texts from HuggingFace dataset '{dataset_name}'...")
+    batch_size = getattr(config, "INFERENCE_BATCH_SIZE", 16)
+    predictions = []
+    for i in tqdm(range(0, len(texts), batch_size), desc="Predicting batches"):
+        batch_texts = texts[i:i+batch_size]
+        batch_preds = predict(batch_texts, model, tokenizer)
+        predictions.extend(batch_preds)
+    pred_labels = [p["predicted_label"] for p in predictions]
+    accuracy = accuracy_score(labels, pred_labels)
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, pred_labels, average="binary", pos_label=1)
+    print("--- HuggingFace Dataset Evaluation Results ---")
+    print(f"Total Texts Evaluated: {len(labels)}")
+    print(f"Accuracy: {accuracy*100:.2f}%")
+    print(f"Precision (AI): {precision*100:.2f}%")
+    print(f"Recall (AI): {recall*100:.2f}%")
+    print(f"F1 Score (AI): {f1*100:.2f}%")
+    results = {
+        "total_texts_evaluated": len(labels),
+        "accuracy": accuracy*100,
+        "precision": precision*100,
+        "recall": recall*100,
+        "f1": f1*100,
+    }
+    return results
+
 def main():
     parser = argparse.ArgumentParser(description="Run AI text detection inference or evaluation.")
     parser.add_argument(
@@ -310,9 +387,35 @@ def main():
         default=None,
         help="Number of random samples to evaluate from each file (only if mode is 'evaluate'). If not specified, all samples are used."
     )
+    parser.add_argument(
+        "--hf_dataset",
+        type=str,
+        choices=["HC3", "AITextPile", "TuringBench"],
+        default=None,
+        help="(evaluate mode only) If set, use a specific HuggingFace dataset (HC3, AITextPile, or TuringBench) instead of --dev_data_path."
+    )
+    parser.add_argument(
+        "--evaluate_all_hf",
+        action="store_true",
+        help="If set (with --mode evaluate), evaluate on all 3 HuggingFace datasets: HC3, AITextPile, TuringBench."
+    )
     args = parser.parse_args()
     if args.mode == "predict" and not args.texts:
         parser.error("The 'predict' mode requires at least one text to classify.")
+
+    # If --hf_dataset is set and mode is evaluate, override dev_data_path
+    if args.mode == "evaluate" and args.hf_dataset is not None:
+        # Map dataset names to their corresponding paths (update as needed)
+        hf_dataset_paths = {
+            "HC3": "dev_data/HC3/",  # Example path, update as needed
+            "AITextPile": "dev_data/AITextPile/",  # Example path, update as needed
+            "TuringBench": "dev_data/TuringBench/",  # Example path, update as needed
+        }
+        if args.hf_dataset in hf_dataset_paths:
+            args.dev_data_path = hf_dataset_paths[args.hf_dataset]
+        else:
+            raise ValueError(f"Unknown hf_dataset: {args.hf_dataset}")
+
     print(f"Loading model from adapter path: {args.model_path}")
     model, tokenizer = load_model_for_inference(args.model_path)
     print("Model and tokenizer loaded successfully.")
@@ -326,7 +429,25 @@ def main():
             print(f"  Score (AI-Generated): {res['score_ai_generated']:.4f}")
             print("-" * 20)
     elif args.mode == "evaluate":
-        evaluate_on_dev_set(model, tokenizer, dev_data_path=args.dev_data_path, output_filepath=args.output_filepath, num_samples=args.num_samples)
+        if args.evaluate_all_hf:
+            all_datasets = ["HC3", "AITextPile", "TuringBench"]
+            all_results = {}
+            for ds in all_datasets:
+                print(f"\n===== Evaluating on {ds} =====")
+                result = evaluate_on_hf_dataset(model, tokenizer, dataset_name=ds, num_samples=args.num_samples)
+                all_results[ds] = result
+            print("\n===== Summary of All HuggingFace Dataset Evaluations =====")
+            for ds, metrics in all_results.items():
+                print(f"\n--- {ds} ---")
+                if metrics is not None:
+                    for k, v in metrics.items():
+                        print(f"{k}: {v}")
+                else:
+                    print("No results.")
+        elif args.hf_dataset is not None:
+            evaluate_on_hf_dataset(model, tokenizer, dataset_name=args.hf_dataset, num_samples=args.num_samples)
+        else:
+            evaluate_on_dev_set(model, tokenizer, dev_data_path=args.dev_data_path, output_filepath=args.output_filepath, num_samples=args.num_samples)
 
 if __name__ == "__main__":
     main()
@@ -354,4 +475,12 @@ python inference.py --mode evaluate
 
 # Predict using the default model path
 python inference.py --mode predict "This is a test sentence to classify."
+
+# Evaluate on a specific HuggingFace dataset (HC3, AITextPile, or TuringBench)
+python inference.py --mode evaluate --hf_dataset HC3
+python inference.py --mode evaluate --hf_dataset AITextPile --num_samples 100
+
+# Evaluate on all three HuggingFace datasets and print summary
+python inference.py --mode evaluate --evaluate_all_hf
+
 """
