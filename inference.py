@@ -10,16 +10,20 @@ import random
 import config
 from datasets import load_dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, f1_score
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 def load_model_for_inference(adapter_path: str):
-    print(f"Loading PEFT adapter from: {adapter_path}")
+    logging.info(f"Loading PEFT adapter from: {adapter_path}")
     peft_config = PeftConfig.from_pretrained(adapter_path)
     base_model_name = peft_config.base_model_name_or_path
-    print(f"Base model identified from adapter config: {base_model_name}")
+    logging.info(f"Base model identified from adapter config: {base_model_name}")
     tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-        print(f"Tokenizer: pad_token set to '{tokenizer.pad_token}' (ID: {tokenizer.pad_token_id})")
+        logging.info(f"Tokenizer: pad_token set to '{tokenizer.pad_token}' (ID: {tokenizer.pad_token_id})")
     quantization_config_inf = None
     if config.USE_4BIT_QUANTIZATION:
         quantization_config_inf = BitsAndBytesConfig(
@@ -28,8 +32,8 @@ def load_model_for_inference(adapter_path: str):
             bnb_4bit_compute_dtype=config.BNB_4BIT_COMPUTE_DTYPE,
             bnb_4bit_use_double_quant=True,
         )
-        print("Using 4-bit quantization for inference model loading.")
-    print(f"Loading base model '{base_model_name}' for inference...")
+        logging.info("Using 4-bit quantization for inference model loading.")
+    logging.info(f"Loading base model '{base_model_name}' for inference...")
     base_model = AutoModelForSequenceClassification.from_pretrained(
         base_model_name,
         num_labels=2,
@@ -43,14 +47,14 @@ def load_model_for_inference(adapter_path: str):
     if tokenizer.pad_token_id is not None:
         if base_model.config.pad_token_id is None:
             base_model.config.pad_token_id = tokenizer.pad_token_id
-            print(f"Base Model: model.config.pad_token_id was None, explicitly set to {tokenizer.pad_token_id}")
+            logging.info(f"Base Model: model.config.pad_token_id was None, explicitly set to {tokenizer.pad_token_id}")
         elif base_model.config.pad_token_id != tokenizer.pad_token_id:
             # If there's a mismatch, prioritize the tokenizer's pad_token_id as it's used for input preparation
-            print(f"Warning: base_model.config.pad_token_id ({base_model.config.pad_token_id}) differs from tokenizer.pad_token_id ({tokenizer.pad_token_id}). Overwriting model's config with tokenizer's pad_token_id.")
+            logging.warning(f"base_model.config.pad_token_id ({base_model.config.pad_token_id}) differs from tokenizer.pad_token_id ({tokenizer.pad_token_id}). Overwriting model's config with tokenizer's pad_token_id.")
             base_model.config.pad_token_id = tokenizer.pad_token_id
     else:
         # This scenario implies an issue with the tokenizer's eos_token or its setup, which is unlikely with standard Hugging Face tokenizers but worth noting.
-        print("Warning: tokenizer.pad_token_id is None after attempting to set pad_token. The model may still encounter issues with batch processing if padding is required.")
+        logging.warning("tokenizer.pad_token_id is None after attempting to set pad_token. The model may still encounter issues with batch processing if padding is required.")
 
     model = PeftModel.from_pretrained(base_model, adapter_path)
     model.eval()
@@ -306,24 +310,24 @@ def evaluate_on_hf_dataset(model, tokenizer, dataset_name: str, num_samples=None
     Treats label==0 as human, 1 as machine. Computes accuracy, precision, recall, F1.
     Prints and returns results in the same format as evaluate_on_dev_set().
     """
-    print(f"\n--- Loading HuggingFace dataset: {dataset_name} ---")
+    logging.info(f"Loading HuggingFace dataset: {dataset_name}")
     # You may want to customize the split and field names for each dataset
     dataset = load_dataset(dataset_name, split="test")
-    # Normalize to list of dicts with 'text' and 'label'
+    logging.info("Normalizing dataset...")
     normalized = normalize_hf_dataset(dataset, dataset_name)
     if num_samples is not None and num_samples > 0 and num_samples < len(normalized):
-        print(f"Randomly sampling {num_samples} examples from dataset...")
+        logging.info(f"Randomly sampling {num_samples} examples from dataset...")
         normalized = random.sample(normalized, num_samples)
     elif num_samples is not None and num_samples >= len(normalized):
-        print(f"Requested {num_samples} samples, but dataset only has {len(normalized)}. Using all available.")
+        logging.info(f"Requested {num_samples} samples, but dataset only has {len(normalized)}. Using all available.")
     elif num_samples is not None and num_samples <= 0:
-        print(f"num_samples is {num_samples}, using all available.")
+        logging.info(f"num_samples is {num_samples}, using all available.")
     if not normalized:
-        print("No valid examples found in dataset for evaluation.")
+        logging.warning("No valid examples found in dataset for evaluation.")
         return None
     texts = [ex["text"] for ex in normalized]
     labels = [ex["label"] for ex in normalized]
-    print(f"Predicting {len(texts)} texts from HuggingFace dataset '{dataset_name}'...")
+    logging.info(f"Predicting {len(texts)} texts from HuggingFace dataset '{dataset_name}' ({len(texts)} samples)...")
     batch_size = getattr(config, "INFERENCE_BATCH_SIZE", 16)
     predictions = []
     for i in tqdm(range(0, len(texts), batch_size), desc="Predicting batches"):
@@ -333,12 +337,12 @@ def evaluate_on_hf_dataset(model, tokenizer, dataset_name: str, num_samples=None
     pred_labels = [p["predicted_label"] for p in predictions]
     accuracy = accuracy_score(labels, pred_labels)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, pred_labels, average="binary", pos_label=1)
-    print("--- HuggingFace Dataset Evaluation Results ---")
-    print(f"Total Texts Evaluated: {len(labels)}")
-    print(f"Accuracy: {accuracy*100:.2f}%")
-    print(f"Precision (AI): {precision*100:.2f}%")
-    print(f"Recall (AI): {recall*100:.2f}%")
-    print(f"F1 Score (AI): {f1*100:.2f}%")
+    logging.info("--- HuggingFace Dataset Evaluation Results ---")
+    logging.info(f"Total Texts Evaluated: {len(labels)}")
+    logging.info(f"Accuracy: {accuracy*100:.2f}%")
+    logging.info(f"Precision (AI): {precision*100:.2f}%")
+    logging.info(f"Recall (AI): {recall*100:.2f}%")
+    logging.info(f"F1 Score (AI): {f1*100:.2f}%")
     results = {
         "total_texts_evaluated": len(labels),
         "accuracy": accuracy*100,
@@ -419,6 +423,7 @@ def main():
     print(f"Loading model from adapter path: {args.model_path}")
     model, tokenizer = load_model_for_inference(args.model_path)
     print("Model and tokenizer loaded successfully.")
+    logging.info("Model and tokenizer loaded successfully.")
     if args.mode == "predict":
         predictions = predict(args.texts, model, tokenizer)
         print("\n--- Inference Results ---")
