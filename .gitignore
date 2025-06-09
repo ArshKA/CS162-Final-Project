@@ -13,3 +13,5 @@ env.sh
 cs162-final-dev/
 
 !/saved_models/mistral_raid_detector_adapter/
+!/saved_models/checkpoint-1000/
+
