@@ -9,15 +9,20 @@ from tqdm import tqdm
 import random
 import config
 
-def load_model_for_inference(adapter_path: str):
-    print(f"Loading PEFT adapter from: {adapter_path}")
-    peft_config = PeftConfig.from_pretrained(adapter_path)
-    base_model_name = peft_config.base_model_name_or_path
-    print(f"Base model identified from adapter config: {base_model_name}")
+def load_model_for_inference(adapter_path: str = None, use_adapter: bool = True):
+    if use_adapter:
+        print(f"Loading PEFT adapter from: {adapter_path}")
+        peft_config = PeftConfig.from_pretrained(adapter_path)
+        base_model_name = peft_config.base_model_name_or_path
+    else:
+        print("Loading base model without adapter...")
+        base_model_name = adapter_path  # use the path/model name directly
+
     tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         print(f"Tokenizer: pad_token set to '{tokenizer.pad_token}' (ID: {tokenizer.pad_token_id})")
+
     quantization_config_inf = None
     if config.USE_4BIT_QUANTIZATION:
         quantization_config_inf = BitsAndBytesConfig(
@@ -27,6 +32,7 @@ def load_model_for_inference(adapter_path: str):
             bnb_4bit_use_double_quant=True,
         )
         print("Using 4-bit quantization for inference model loading.")
+
     print(f"Loading base model '{base_model_name}' for inference...")
     
     # Determine the best dtype for Colab compatibility
@@ -52,20 +58,21 @@ def load_model_for_inference(adapter_path: str):
         trust_remote_code=True,
     )
 
-    # Ensure the model's config also reflects the pad_token_id used by the tokenizer
     if tokenizer.pad_token_id is not None:
         if base_model.config.pad_token_id is None:
             base_model.config.pad_token_id = tokenizer.pad_token_id
             print(f"Base Model: model.config.pad_token_id was None, explicitly set to {tokenizer.pad_token_id}")
         elif base_model.config.pad_token_id != tokenizer.pad_token_id:
-            # If there's a mismatch, prioritize the tokenizer's pad_token_id as it's used for input preparation
-            print(f"Warning: base_model.config.pad_token_id ({base_model.config.pad_token_id}) differs from tokenizer.pad_token_id ({tokenizer.pad_token_id}). Overwriting model's config with tokenizer's pad_token_id.")
+            print(f"Warning: base_model.config.pad_token_id ({base_model.config.pad_token_id}) differs from tokenizer.pad_token_id ({tokenizer.pad_token_id}). Overwriting.")
             base_model.config.pad_token_id = tokenizer.pad_token_id
     else:
-        # This scenario implies an issue with the tokenizer's eos_token or its setup, which is unlikely with standard Hugging Face tokenizers but worth noting.
-        print("Warning: tokenizer.pad_token_id is None after attempting to set pad_token. The model may still encounter issues with batch processing if padding is required.")
+        print("Warning: tokenizer.pad_token_id is None after attempting to set pad_token.")
 
-    model = PeftModel.from_pretrained(base_model, adapter_path)
+    if use_adapter:
+        model = PeftModel.from_pretrained(base_model, adapter_path)
+    else:
+        model = base_model
+
     model.eval()
     return model, tokenizer
 
@@ -133,8 +140,8 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
     }
     overall_texts_processed = 0
     overall_correct_predictions = 0
-    
-    evaluation_results = {"files": {}} # To store results grouped by file
+
+    evaluation_results = {"files": {}}
 
     print(f"\n--- Starting Evaluation on Dev Set ({dev_data_path}) ---")
 
@@ -142,7 +149,7 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
     if os.path.isfile(dev_data_path) and dev_data_path.endswith(".jsonl"):
         jsonl_files = [os.path.basename(dev_data_path)]
         dev_data_path = os.path.dirname(dev_data_path)
-        if not dev_data_path: # Handle case where file is in current directory
+        if not dev_data_path:
             dev_data_path = "."
     elif os.path.isdir(dev_data_path):
         try:
@@ -174,14 +181,14 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
         }
         texts_to_predict = []
         ground_truths = []
-        original_lines_data = [] # Store original lines with their type
+        original_lines_data = []
 
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(tqdm(f, desc=f"Reading {filename}")):
                     try:
                         data = json.loads(line.strip())
-                        original_lines_data.append(data) # Store the whole data dict
+                        original_lines_data.append(data)
                     except json.JSONDecodeError:
                         file_stats["errors"] += 1
                     except Exception as e:
@@ -201,15 +208,14 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
 
         sampled_lines_data = []
         if num_samples and num_samples > 0 and num_samples < len(original_lines_data):
-            print(f"Randomly sampling {num_samples} lines from {filename}...")
-            sampled_lines_data = random.sample(original_lines_data, num_samples)
+            print(f"Subsampling first {num_samples} lines from {filename}...")
+            sampled_lines_data = original_lines_data[:num_samples]
         else:
             sampled_lines_data = original_lines_data
             if num_samples and num_samples >= len(original_lines_data):
                 print(f"Requested {num_samples} samples, but file only has {len(original_lines_data)}. Using all available lines.")
             elif num_samples is not None and num_samples <=0:
-                 print(f"num_samples is {num_samples}, using all available lines.")
-
+                print(f"num_samples is {num_samples}, using all available lines.")
 
         for data in tqdm(sampled_lines_data, desc=f"Preparing texts from {filename}"):
             human_text = data.get("human_text")
@@ -223,11 +229,9 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
 
         if not texts_to_predict:
             print(f"No valid texts found in the sampled data from {filename} to evaluate.")
-            # errors here would already be counted from the initial read if lines were malformed
-            # but it's possible that valid json lines didn't contain 'human_text' or 'machine_text'
             if file_stats["errors"] > 0:
-                 print(f"  ({file_stats['errors']} lines had JSON parsing errors and were skipped before sampling)")
-            evaluation_results["files"][filename] = { # Still record file stats even if no texts post-sampling
+                print(f"  ({file_stats['errors']} lines had JSON parsing errors and were skipped before sampling)")
+            evaluation_results["files"][filename] = {
                 "human_correct": 0, "human_total": 0, "human_accuracy": 0,
                 "ai_correct": 0, "ai_total": 0, "ai_accuracy": 0,
                 "overall_correct": 0, "overall_total": 0, "overall_accuracy": 0,
@@ -243,6 +247,18 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
             batch_texts = texts_to_predict[i:i + batch_size]
             batch_preds = predict(batch_texts, model, tokenizer)
             predictions.extend(batch_preds)
+
+        # --- SAVE PROBABILITIES FOR THIS FILE ---
+        probs_save_path = os.path.splitext(filename)[0] + "_probabilities.jsonl"
+        probs_save_path = os.path.join("probs", probs_save_path)
+        try:
+            with open(probs_save_path, 'w', encoding='utf-8') as pf:
+                for pred in predictions:
+                    pf.write(json.dumps(pred) + "\n")
+            print(f"  Probabilities for {filename} saved to {probs_save_path}")
+        except Exception as e:
+            print(f"  Error saving probabilities for {filename} to {probs_save_path}: {e}")
+
         for i, pred_result in enumerate(predictions):
             predicted_label = pred_result["predicted_label"]
             ground_truth_label = ground_truths[i]
@@ -289,7 +305,7 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
     overall_human_accuracy = (all_files_stats["human_correct"] / all_files_stats["human_total"] * 100) if all_files_stats["human_total"] > 0 else 0
     overall_ai_accuracy = (all_files_stats["ai_correct"] / all_files_stats["ai_total"] * 100) if all_files_stats["ai_total"] > 0 else 0
     total_overall_accuracy = (overall_correct_predictions / overall_texts_processed * 100) if overall_texts_processed > 0 else 0
-    
+
     evaluation_results["overall_summary"] = {
         "total_human_texts_evaluated": all_files_stats["human_total"],
         "correct_human_predictions": all_files_stats["human_correct"],
@@ -337,7 +353,7 @@ def main():
         "--model_path",
         type=str,
         default=config.INFERENCE_MODEL_PATH,
-        help="Path to the fine-tuned LoRA adapter directory."
+        help="Path to the fine-tuned LoRA adapter directory or base model name/path if not using adapter."
     )
     parser.add_argument(
         "--dev_data_path",
@@ -357,12 +373,20 @@ def main():
         default=None,
         help="Number of random samples to evaluate from each file (only if mode is 'evaluate'). If not specified, all samples are used."
     )
+    parser.add_argument(
+        "--use_adapter",
+        action="store_true",
+        help="Whether to use a LoRA adapter (PEFT) checkpoint. If omitted, runs base model only."
+    )
     args = parser.parse_args()
+
     if args.mode == "predict" and not args.texts:
         parser.error("The 'predict' mode requires at least one text to classify.")
-    print(f"Loading model from adapter path: {args.model_path}")
-    model, tokenizer = load_model_for_inference(args.model_path)
+
+    print(f"Loading model from path: {args.model_path} with use_adapter={args.use_adapter}")
+    model, tokenizer = load_model_for_inference(args.model_path, use_adapter=args.use_adapter)
     print("Model and tokenizer loaded successfully.")
+
     if args.mode == "predict":
         predictions = predict(args.texts, model, tokenizer)
         print("\n--- Inference Results ---")
@@ -370,6 +394,7 @@ def main():
             label_str = "AI-Generated" if res["predicted_label"] == 1 else "Human-Written"
             print(f"Text: \"{res['text'][:100]}...\"")
             print(f"  Prediction: {label_str} (Class {res['predicted_label']})")
+            print(f"  Probabilities: {res['probabilities']}")
             print(f"  Score (AI-Generated): {res['score_ai_generated']:.4f}")
             print("-" * 20)
     elif args.mode == "evaluate":
@@ -377,6 +402,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 """
 Example Usages:
@@ -399,6 +425,5 @@ python inference.py --mode evaluate --dev_data_path dev_data/arxiv_dolly.jsonl -
 # Evaluate using the default model path (defined in config.py) and default dev data path (dev_data/)
 python inference.py --mode evaluate
 
-# Predict using the default model path
-python inference.py --mode predict "This is a test sentence to classify."
+#
 """

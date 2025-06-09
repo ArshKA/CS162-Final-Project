@@ -1,6 +1,6 @@
 import torch
 
-MODEL_NAME = "Qwen/Qwen3-4B"
+MODEL_NAME = "google/gemma-7b"
 
 DATASET_NAME = "liamdugan/raid"
 DATASET_SPLIT = "train"
@@ -12,8 +12,8 @@ SUBSAMPLE_STRATEGY = "balanced_human_ai"
 
 MAX_LENGTH = 512
 
-OUTPUT_DIR = "./saved_models/mistral_raid_detector_adapter_qwen3"
-LOGGING_DIR = "./wandb/detector-test-qwen3"
+OUTPUT_DIR = "./saved_models/mistral_raid_detector_adapter_gemma7b"
+LOGGING_DIR = "./wandb/detector-test-gemma7b"
 NUM_EPOCHS = 5
 BATCH_SIZE = 8
 GRAD_ACCUMULATION_STEPS = 4
@@ -34,7 +34,7 @@ LORA_TARGET_MODULES = [
     "o_proj",
 ]
 
-USE_4BIT_QUANTIZATION = False
+USE_4BIT_QUANTIZATION = True
 BNB_4BIT_COMPUTE_DTYPE = torch.bfloat16
 BNB_4BIT_QUANT_TYPE = "nf4"
 
@@ -43,6 +43,9 @@ SEED = 1
 TEST_SPLIT_SIZE = 0.1
 
 INFERENCE_MODEL_PATH = OUTPUT_DIR
-INFERENCE_BATCH_SIZE = 8
+INFERENCE_BATCH_SIZE = 32
 
 MAX_EVAL_SAMPLES = 100  # Evaluate on 500 samples, or set to None to evaluate on all
+
+# Flag to enable or disable LoRA finetuning
+USE_LORA = True

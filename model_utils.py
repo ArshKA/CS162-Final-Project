@@ -25,17 +25,20 @@ def get_model(model_name: str, num_labels: int = 2):
     if model.config.pad_token_id is None:
         model.config.pad_token_id = model.config.eos_token_id
         print(f"Set model.config.pad_token_id to EOS token ID: {model.config.eos_token_id}")
-    peft_config = LoraConfig(
-        task_type=TaskType.SEQ_CLS,
-        r=config.LORA_R,
-        lora_alpha=config.LORA_ALPHA,
-        lora_dropout=config.LORA_DROPOUT,
-        target_modules=config.LORA_TARGET_MODULES,
-        bias="none",
-    )
-    model = get_peft_model(model, peft_config)
-    print("PEFT LoRA model configured.")
-    model.print_trainable_parameters()
+    if config.USE_LORA:
+        peft_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            r=config.LORA_R,
+            lora_alpha=config.LORA_ALPHA,
+            lora_dropout=config.LORA_DROPOUT,
+            target_modules=config.LORA_TARGET_MODULES,
+            bias="none",
+        )
+        model = get_peft_model(model, peft_config)
+        print("PEFT LoRA model configured.")
+        model.print_trainable_parameters()
+    else:
+        print("Skipping LoRA configuration because USE_LORA is set to False.")
     return model
 
 if __name__ == '__main__':
