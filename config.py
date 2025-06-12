@@ -43,7 +43,7 @@ SEED = 1
 TEST_SPLIT_SIZE = 0.1
 
 INFERENCE_MODEL_PATH = OUTPUT_DIR
-INFERENCE_BATCH_SIZE = 32
+INFERENCE_BATCH_SIZE = 4
 
 MAX_EVAL_SAMPLES = 100  # Evaluate on 500 samples, or set to None to evaluate on all
 

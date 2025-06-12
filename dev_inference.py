@@ -140,20 +140,26 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
     }
     overall_texts_processed = 0
     overall_correct_predictions = 0
+    
+    # Global confusion matrix for overall metrics
+    global_true_positives = 0
+    global_true_negatives = 0
+    global_false_positives = 0
+    global_false_negatives = 0
 
     evaluation_results = {"files": {}}
 
     print(f"\n--- Starting Evaluation on Dev Set ({dev_data_path}) ---")
 
-    jsonl_files = []
-    if os.path.isfile(dev_data_path) and dev_data_path.endswith(".jsonl"):
-        jsonl_files = [os.path.basename(dev_data_path)]
+    data_files = []
+    if os.path.isfile(dev_data_path) and (dev_data_path.endswith(".jsonl") or dev_data_path.endswith(".json")):
+        data_files = [os.path.basename(dev_data_path)]
         dev_data_path = os.path.dirname(dev_data_path)
         if not dev_data_path:
             dev_data_path = "."
     elif os.path.isdir(dev_data_path):
         try:
-            jsonl_files = [f for f in os.listdir(dev_data_path) if f.endswith(".jsonl") and os.path.isfile(os.path.join(dev_data_path, f))]
+            data_files = [f for f in os.listdir(dev_data_path) if (f.endswith(".jsonl") or f.endswith(".json")) and os.path.isfile(os.path.join(dev_data_path, f))]
         except FileNotFoundError:
             print(f"Error: Directory not found: {dev_data_path}")
             return
@@ -161,17 +167,17 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
             print(f"Error listing files in {dev_data_path}: {e}")
             return
     else:
-        print(f"Error: dev_data_path '{dev_data_path}' is not a valid .jsonl file or directory.")
+        print(f"Error: dev_data_path '{dev_data_path}' is not a valid .json/.jsonl file or directory.")
         return
 
     if not dev_data_path.endswith('/'):
         dev_data_path += '/'
 
-    if not jsonl_files:
-        print(f"No .jsonl files found in {dev_data_path}")
+    if not data_files:
+        print(f"No .json/.jsonl files found in {dev_data_path}")
         return
 
-    for filename in jsonl_files:
+    for filename in data_files:
         filepath = os.path.join(dev_data_path, filename)
         print(f"\nProcessing file: {filename}...")
         file_stats = {
@@ -185,14 +191,33 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
 
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                for line_num, line in enumerate(tqdm(f, desc=f"Reading {filename}")):
+                if filename.endswith('.jsonl'):
+                    # JSONL format: one JSON object per line
+                    for line_num, line in enumerate(tqdm(f, desc=f"Reading {filename}")):
+                        try:
+                            data = json.loads(line.strip())
+                            original_lines_data.append(data)
+                        except json.JSONDecodeError:
+                            file_stats["errors"] += 1
+                        except Exception as e:
+                            file_stats["errors"] +=1
+                else:
+                    # JSON format: array of objects
                     try:
-                        data = json.loads(line.strip())
-                        original_lines_data.append(data)
-                    except json.JSONDecodeError:
+                        content = f.read()
+                        data_array = json.loads(content)
+                        if isinstance(data_array, list):
+                            original_lines_data.extend(data_array)
+                            print(f"Reading {filename}: {len(data_array)} items loaded")
+                        else:
+                            print(f"Error: {filename} does not contain a JSON array")
+                            file_stats["errors"] += 1
+                    except json.JSONDecodeError as e:
+                        print(f"Error: {filename} is not valid JSON: {e}")
                         file_stats["errors"] += 1
                     except Exception as e:
-                        file_stats["errors"] +=1
+                        print(f"Error processing {filename}: {e}")
+                        file_stats["errors"] += 1
         except FileNotFoundError:
             print(f"Error: File not found: {filepath}")
             continue
@@ -221,11 +246,17 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
             human_text = data.get("human_text")
             if human_text and isinstance(human_text, str):
                 texts_to_predict.append(human_text)
-                ground_truths.append(0)
+                ground_truths.append(0)  # 0 = Human
             machine_text = data.get("machine_text")
             if machine_text and isinstance(machine_text, str):
                 texts_to_predict.append(machine_text)
-                ground_truths.append(1)
+                ground_truths.append(1)  # 1 = AI-generated
+            
+            # Handle student essay format with document field (assume all human-written)
+            document_text = data.get("document")
+            if document_text and isinstance(document_text, str) and not human_text and not machine_text:
+                texts_to_predict.append(document_text)
+                ground_truths.append(0)  # 0 = Human (student essays are human-written)
 
         if not texts_to_predict:
             print(f"No valid texts found in the sampled data from {filename} to evaluate.")
@@ -235,6 +266,11 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
                 "human_correct": 0, "human_total": 0, "human_accuracy": 0,
                 "ai_correct": 0, "ai_total": 0, "ai_accuracy": 0,
                 "overall_correct": 0, "overall_total": 0, "overall_accuracy": 0,
+                "precision": 0, "recall": 0, "f1_score": 0,
+                "confusion_matrix": {
+                    "true_positives": 0, "true_negatives": 0,
+                    "false_positives": 0, "false_negatives": 0
+                },
                 "errors": file_stats["errors"],
                 "notes": "No valid texts to predict after sampling (or no texts in original file)."
             }
@@ -259,12 +295,32 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
         except Exception as e:
             print(f"  Error saving probabilities for {filename} to {probs_save_path}: {e}")
 
+        # init confusion matrix
+        true_positives = 0   # correct AI predictions
+        true_negatives = 0   # correct human predictions
+        false_positives = 0  # incorrect human predictions
+        false_negatives = 0  # incorrect AI predictions
+
         for i, pred_result in enumerate(predictions):
             predicted_label = pred_result["predicted_label"]
             ground_truth_label = ground_truths[i]
             overall_texts_processed += 1
             if predicted_label == ground_truth_label:
                 overall_correct_predictions += 1
+            # update confusion matrix
+            if ground_truth_label == 1 and predicted_label == 1:
+                true_positives += 1
+                global_true_positives += 1
+            elif ground_truth_label == 0 and predicted_label == 0:
+                true_negatives += 1
+                global_true_negatives += 1
+            elif ground_truth_label == 0 and predicted_label == 1:
+                false_positives += 1
+                global_false_positives += 1
+            elif ground_truth_label == 1 and predicted_label == 0:
+                false_negatives += 1
+                global_false_negatives += 1
+            
             if ground_truth_label == 0:
                 file_stats["human_total"] += 1
                 all_files_stats["human_total"] +=1
@@ -282,10 +338,18 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
         file_total_correct = file_stats["human_correct"] + file_stats["ai_correct"]
         file_total_samples = file_stats["human_total"] + file_stats["ai_total"]
         file_overall_accuracy = (file_total_correct / file_total_samples * 100) if file_total_samples > 0 else 0
+        
+        precision = (true_positives / (true_positives + false_positives)) if (true_positives + false_positives) > 0 else 0
+        recall = (true_positives / (true_positives + false_negatives)) if (true_positives + false_negatives) > 0 else 0
+        f1_score = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0
+        
         print(f"Results for {filename}:")
         print(f"  Human Texts: {file_stats['human_correct']}/{file_stats['human_total']} correct ({human_accuracy:.2f}%)")
         print(f"  AI-Generated Texts: {file_stats['ai_correct']}/{file_stats['ai_total']} correct ({ai_accuracy:.2f}%)")
         print(f"  Overall Accuracy for {filename}: {file_total_correct}/{file_total_samples} correct ({file_overall_accuracy:.2f}%)")
+        print(f"  Precision (AI Detection): {precision:.4f}")
+        print(f"  Recall (AI Detection): {recall:.4f}")
+        print(f"  F1 Score (AI Detection): {f1_score:.4f}")
         if file_stats["errors"] > 0:
             print(f"  ({file_stats['errors']} lines had errors and were skipped)")
 
@@ -299,12 +363,25 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
             "overall_correct": file_total_correct,
             "overall_total": file_total_samples,
             "overall_accuracy": file_overall_accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1_score,
+            "confusion_matrix": {
+                "true_positives": true_positives,
+                "true_negatives": true_negatives,
+                "false_positives": false_positives,
+                "false_negatives": false_negatives
+            },
             "errors": file_stats["errors"]
         }
 
     overall_human_accuracy = (all_files_stats["human_correct"] / all_files_stats["human_total"] * 100) if all_files_stats["human_total"] > 0 else 0
     overall_ai_accuracy = (all_files_stats["ai_correct"] / all_files_stats["ai_total"] * 100) if all_files_stats["ai_total"] > 0 else 0
     total_overall_accuracy = (overall_correct_predictions / overall_texts_processed * 100) if overall_texts_processed > 0 else 0
+    
+    overall_precision = (global_true_positives / (global_true_positives + global_false_positives)) if (global_true_positives + global_false_positives) > 0 else 0
+    overall_recall = (global_true_positives / (global_true_positives + global_false_negatives)) if (global_true_positives + global_false_negatives) > 0 else 0
+    overall_f1_score = (2 * overall_precision * overall_recall / (overall_precision + overall_recall)) if (overall_precision + overall_recall) > 0 else 0
 
     evaluation_results["overall_summary"] = {
         "total_human_texts_evaluated": all_files_stats["human_total"],
@@ -315,7 +392,16 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
         "overall_ai_accuracy": overall_ai_accuracy,
         "total_texts_processed": overall_texts_processed,
         "total_correct_predictions": overall_correct_predictions,
-        "overall_accuracy": total_overall_accuracy
+        "overall_accuracy": total_overall_accuracy,
+        "overall_precision": overall_precision,
+        "overall_recall": overall_recall,
+        "overall_f1_score": overall_f1_score,
+        "overall_confusion_matrix": {
+            "true_positives": global_true_positives,
+            "true_negatives": global_true_negatives,
+            "false_positives": global_false_positives,
+            "false_negatives": global_false_negatives
+        }
     }
 
     print("--- Overall Evaluation Summary ---")
@@ -326,6 +412,9 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
     print(f"Total Texts Processed: {overall_texts_processed}")
     print(f"Total Correct Predictions: {overall_correct_predictions}")
     print(f"Overall Accuracy: {total_overall_accuracy:.2f}%")
+    print(f"Overall Precision (AI Detection): {overall_precision:.4f}")
+    print(f"Overall Recall (AI Detection): {overall_recall:.4f}")
+    print(f"Overall F1 Score (AI Detection): {overall_f1_score:.4f}")
 
     try:
         with open(output_filepath, 'w', encoding='utf-8') as f:
@@ -359,7 +448,7 @@ def main():
         "--dev_data_path",
         type=str,
         default="dev_data/",
-        help="Path to the directory containing .jsonl files or a single .jsonl file for evaluation (only if mode is 'evaluate')."
+        help="Path to the directory containing .json/.jsonl files or a single .json/.jsonl file for evaluation (only if mode is 'evaluate')."
     )
     parser.add_argument(
         "--output_filepath",
@@ -405,22 +494,23 @@ if __name__ == "__main__":
 
 
 """
-Example Usages:
+Usage:
 
 # Predict on a list of texts using a specific model checkpoint
 python inference.py --mode predict --model_path saved_models/mistral_raid_detector_adapter/checkpoint-500 "I am a human" "I am an AI-generated text" "I'm a human" "The wind whispered through the ancient pines, carrying secrets older than the mountains themselves. In the valley below, a lone figure trudged through the snow, their cloak a patchwork of faded dreams. Stars blinked faintly above, as if unsure whether to guide or merely watch. A distant howl broke the silence, sharp and fleeting, like a memory that refused to be forgotten. The figure paused, breath clouding in the frigid air, and glanced at the horizon where dawn hesitated, unsure of its welcome."
 
-# Evaluate the model on all .jsonl files in a directory
-python inference.py --mode evaluate --dev_data_path dev_data/ --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000
+    # Evaluate the model on all .json/.jsonl files in a directory
+    python inference.py --mode evaluate --dev_data_path dev_data/ --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000
 
-# Evaluate the model on a single specific .jsonl file
-python inference.py --mode evaluate --dev_data_path dev_data/dataset1.jsonl --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000
+    # Evaluate the model on a single specific .json/.jsonl file
+    python inference.py --mode evaluate --dev_data_path dev_data/dataset1.jsonl --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000
+    python inference.py --mode evaluate --dev_data_path dev_data/hewlett.json --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000
 
-# Evaluate the model on all .jsonl files in a directory, using 50 random samples from each file
-python inference.py --mode evaluate --dev_data_path dev_data/ --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000 --num_samples 50
+    # Evaluate the model on all .json/.jsonl files in a directory, using 50 random samples from each file
+    python inference.py --mode evaluate --dev_data_path dev_data/ --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000 --num_samples 50
 
-# Evaluate the model on a single specific .jsonl file, using 20 random samples from that file
-python inference.py --mode evaluate --dev_data_path dev_data/arxiv_dolly.jsonl --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000 --num_samples 100
+    # Evaluate the model on a single specific file, using 20 random samples from that file
+    python inference.py --mode evaluate --dev_data_path dev_data/arxiv_dolly.jsonl --model_path saved_models/mistral_raid_detector_adapter/checkpoint-1000 --num_samples 100
 
 # Evaluate using the default model path (defined in config.py) and default dev data path (dev_data/)
 python inference.py --mode evaluate

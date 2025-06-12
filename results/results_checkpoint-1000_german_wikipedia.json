@@ -1,0 +1,45 @@
+{
+    "files": {
+        "german_wikipedia.jsonl": {
+            "human_correct": 463,
+            "human_total": 500,
+            "human_accuracy": 92.60000000000001,
+            "ai_correct": 280,
+            "ai_total": 500,
+            "ai_accuracy": 56.00000000000001,
+            "overall_correct": 743,
+            "overall_total": 1000,
+            "overall_accuracy": 74.3,
+            "errors": 0,
+            "precision": 0.8832807570977917,
+            "recall": 0.56,
+            "f1_score": 0.6854345165238679,
+            "confusion_matrix": {
+                "true_positives": 280,
+                "true_negatives": 463,
+                "false_positives": 37,
+                "false_negatives": 220
+            }
+        }
+    },
+    "overall_summary": {
+        "total_human_texts_evaluated": 500,
+        "correct_human_predictions": 463,
+        "overall_human_accuracy": 92.60000000000001,
+        "total_ai_texts_evaluated": 500,
+        "correct_ai_predictions": 280,
+        "overall_ai_accuracy": 56.00000000000001,
+        "total_texts_processed": 1000,
+        "total_correct_predictions": 743,
+        "overall_accuracy": 74.3,
+        "overall_precision": 0.8832807570977917,
+        "overall_recall": 0.56,
+        "overall_f1_score": 0.6854345165238679,
+        "overall_confusion_matrix": {
+            "true_positives": 280,
+            "true_negatives": 463,
+            "false_positives": 37,
+            "false_negatives": 220
+        }
+    }
+}
