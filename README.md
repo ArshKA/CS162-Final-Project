@@ -1,6 +1,7 @@
 # AI-Detector
 
 A fine-tuned language model for detecting AI-generated text vs. human-written text.
+Made for CS 162 Final Project—Professor Saadia Gabriel and TA Ashima Suvarna, UCLA.
 
 ## Setup Instructions
 
