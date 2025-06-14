@@ -16,7 +16,7 @@ def load_model_for_inference(adapter_path: str = None, use_adapter: bool = True)
         base_model_name = peft_config.base_model_name_or_path
     else:
         print("Loading base model without adapter...")
-        base_model_name = adapter_path  # use the path/model name directly
+        base_model_name = adapter_path
 
     tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -35,9 +35,7 @@ def load_model_for_inference(adapter_path: str = None, use_adapter: bool = True)
 
     print(f"Loading base model '{base_model_name}' for inference...")
     
-    # Determine the best dtype for Colab compatibility
     if torch.cuda.is_available():
-        # Check if BFloat16 is supported
         try:
             torch.tensor([1.0], dtype=torch.bfloat16, device='cuda')
             model_dtype = config.BNB_4BIT_COMPUTE_DTYPE if config.USE_4BIT_QUANTIZATION else torch.bfloat16
@@ -88,11 +86,9 @@ def predict(texts: list[str], model, tokenizer):
             max_length=config.MAX_LENGTH
         )
         
-        # Move inputs to model device and ensure compatible dtype
         device = next(model.parameters()).device
         model_dtype = next(model.parameters()).dtype
         
-        # Convert inputs to compatible dtype if needed
         if hasattr(inputs, 'input_ids'):
             inputs = {k: v.to(device) for k, v in inputs.items()}
         else:
@@ -101,12 +97,10 @@ def predict(texts: list[str], model, tokenizer):
         print(f"Running inference on device: {device}, dtype: {model_dtype}")
         
         with torch.no_grad():
-            # Ensure model is in eval mode
             model.eval()
             outputs = model(**inputs)
             logits = outputs.logits
             
-        # Convert to float32 for compatibility
         logits = logits.float()
         probabilities = torch.softmax(logits, dim=-1)
         scores_ai_generated = probabilities[:, 1].cpu().numpy()
@@ -252,11 +246,10 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
                 texts_to_predict.append(machine_text)
                 ground_truths.append(1)  # 1 = AI-generated
             
-            # Handle student essay format with document field (assume all human-written)
             document_text = data.get("document")
             if document_text and isinstance(document_text, str) and not human_text and not machine_text:
                 texts_to_predict.append(document_text)
-                ground_truths.append(0)  # 0 = Human (student essays are human-written)
+                ground_truths.append(0)
 
         if not texts_to_predict:
             print(f"No valid texts found in the sampled data from {filename} to evaluate.")
@@ -284,7 +277,6 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
             batch_preds = predict(batch_texts, model, tokenizer)
             predictions.extend(batch_preds)
 
-        # --- SAVE PROBABILITIES FOR THIS FILE ---
         probs_save_path = os.path.splitext(filename)[0] + "_probabilities.jsonl"
         probs_save_path = os.path.join("probs", probs_save_path)
         try:
@@ -295,7 +287,7 @@ def evaluate_on_dev_set(model, tokenizer, dev_data_path="dev_data/", output_file
         except Exception as e:
             print(f"  Error saving probabilities for {filename} to {probs_save_path}: {e}")
 
-        # init confusion matrix
+
         true_positives = 0   # correct AI predictions
         true_negatives = 0   # correct human predictions
         false_positives = 0  # incorrect human predictions
