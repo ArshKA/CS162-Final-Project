@@ -17,10 +17,10 @@ import pandas as pd
 import tempfile
 import shutil
 
-# Set up logging
+
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-# Disable datasets caching completely
+
 os.environ["HF_DATASETS_CACHE"] = tempfile.mkdtemp()
 os.environ["TRANSFORMERS_CACHE"] = tempfile.mkdtemp()
 
@@ -44,9 +44,9 @@ def load_model_for_inference(adapter_path: str):
         logging.info("Using 4-bit quantization for inference model loading.")
     logging.info(f"Loading base model '{base_model_name}' for inference...")
     
-    # Determine the best dtype for Colab compatibility
+
     if torch.cuda.is_available():
-        # Check if BFloat16 is supported
+
         try:
             torch.tensor([1.0], dtype=torch.bfloat16, device='cuda')
             model_dtype = config.BNB_4BIT_COMPUTE_DTYPE if config.USE_4BIT_QUANTIZATION else torch.bfloat16
@@ -67,17 +67,17 @@ def load_model_for_inference(adapter_path: str):
         trust_remote_code=True,
     )
 
-    # Ensure the model's config also reflects the pad_token_id used by the tokenizer
+
     if tokenizer.pad_token_id is not None:
         if base_model.config.pad_token_id is None:
             base_model.config.pad_token_id = tokenizer.pad_token_id
             logging.info(f"Base Model: model.config.pad_token_id was None, explicitly set to {tokenizer.pad_token_id}")
         elif base_model.config.pad_token_id != tokenizer.pad_token_id:
-            # If there's a mismatch, prioritize the tokenizer's pad_token_id as it's used for input preparation
+
             logging.warning(f"base_model.config.pad_token_id ({base_model.config.pad_token_id}) differs from tokenizer.pad_token_id ({tokenizer.pad_token_id}). Overwriting model's config with tokenizer's pad_token_id.")
             base_model.config.pad_token_id = tokenizer.pad_token_id
     else:
-        # This scenario implies an issue with the tokenizer's eos_token or its setup, which is unlikely with standard Hugging Face tokenizers but worth noting.
+
         logging.warning("tokenizer.pad_token_id is None after attempting to set pad_token. The model may still encounter issues with batch processing if padding is required.")
 
     model = PeftModel.from_pretrained(base_model, adapter_path, offload_dir="offload")
@@ -96,11 +96,11 @@ def predict(texts: list[str], model, tokenizer):
             max_length=config.MAX_LENGTH
         )
         
-        # Move inputs to model device and ensure compatible dtype
+
         device = next(model.parameters()).device
         model_dtype = next(model.parameters()).dtype
         
-        # Convert inputs to compatible dtype if needed
+
         if hasattr(inputs, 'input_ids'):
             inputs = {k: v.to(device) for k, v in inputs.items()}
         else:
@@ -109,12 +109,12 @@ def predict(texts: list[str], model, tokenizer):
         logging.info(f"Running inference on device: {device}, dtype: {model_dtype}")
         
         with torch.no_grad():
-            # Ensure model is in eval mode
+
             model.eval()
             outputs = model(**inputs)
             logits = outputs.logits
             
-        # Convert to float32 for compatibility
+
         logits = logits.float()
         probabilities = torch.softmax(logits, dim=-1)
         scores_ai_generated = probabilities[:, 1].cpu().numpy()
@@ -131,13 +131,13 @@ def predict(texts: list[str], model, tokenizer):
         
     except Exception as e:
         logging.error(f"Error in prediction: {str(e)}")
-        # Return dummy results to maintain compatibility
+
         results = []
         for text in texts:
             results.append({
                 "text": text,
-                "predicted_label": 0,  # Default to human
-                "score_ai_generated": 0.5  # Neutral score
+                "predicted_label": 0,
+                "score_ai_generated": 0.5
             })
         return results
 
@@ -149,14 +149,11 @@ def load_hf_dataset_direct(dataset_name: str, num_samples=None):
     logging.info(f"Loading real dataset {dataset_name}...")
     
     try:
-        # Import datasets here to avoid global caching issues
         from datasets import load_dataset
         import tempfile
         import os
         
-        # Create a completely isolated temporary directory
         with tempfile.TemporaryDirectory() as temp_cache:
-            # Set environment variables for this specific load
             old_cache = os.environ.get("HF_DATASETS_CACHE")
             old_home = os.environ.get("HF_HOME") 
             
@@ -189,10 +186,8 @@ def load_hf_dataset_direct(dataset_name: str, num_samples=None):
                 
                 elif dataset_name == "artem9k/ai-text-detection-pile":
                     logging.info("Loading AI Text Detection Pile dataset (train split only - no test split available)...")
-                    # This dataset only has train split with 1.39M rows - still use train but limit samples
                     dataset = None
                     try:
-                        # Load train split directly
                         dataset = load_dataset("artem9k/ai-text-detection-pile", split="train", cache_dir=temp_cache)
                         logging.info(f"Loaded train split with {len(dataset)} examples")
                     except Exception as e1:
@@ -204,7 +199,6 @@ def load_hf_dataset_direct(dataset_name: str, num_samples=None):
                         return []
                     
                     examples = []
-                    # Use a much smaller default if num_samples not specified for this large dataset
                     max_samples = num_samples if num_samples else 1000  
                     logging.info(f"Processing up to {max_samples} examples from dataset...")
                     
@@ -215,16 +209,14 @@ def load_hf_dataset_direct(dataset_name: str, num_samples=None):
                             
                         try:
                             text = item.get("text")
-                            # Map 'human' to 0, 'machine' to 1
                             source = item.get("source")
                             if source == "human":
                                 label = 0
                             elif source == "machine":
                                 label = 1
                             else:
-                                continue  # Skip unknown sources
+                                continue 
                             
-                            # More robust text validation
                             if text is not None:
                                 text_str = str(text).strip()
                                 if len(text_str) > 0:
@@ -249,13 +241,11 @@ def load_hf_dataset_direct(dataset_name: str, num_samples=None):
                 elif dataset_name == "turingbench/TuringBench":
                     logging.info("Loading TuringBench dataset (using test split - much smaller)...")
                     try:
-                        # Use AA (Authorship Attribution) configuration with test split
                         dataset = load_dataset("turingbench/TuringBench", "AA", split="test", cache_dir=temp_cache)
                         logging.info(f"Loaded TuringBench test split with {len(dataset)} examples")
                     except Exception as e1:
                         logging.warning(f"Failed to load test split: {e1}")
                         try:
-                            # Fallback to train split if test fails
                             dataset = load_dataset("turingbench/TuringBench", "AA", split="train", cache_dir=temp_cache)
                             logging.info(f"Using train split with {len(dataset)} examples")
                         except Exception as e2:
@@ -267,16 +257,14 @@ def load_hf_dataset_direct(dataset_name: str, num_samples=None):
                         if num_samples and len(examples) >= num_samples:
                             break
                             
-                        text = item.get("Generation")  # TuringBench uses "Generation" field
+                        text = item.get("Generation")  
                         label_str = item.get("label")
                         
                         if text and label_str:
-                            # Convert label - for binary TT tasks: 0=human, 1=machine
-                            # For AA tasks: various labels, we'll map to binary
                             if label_str.lower() in ["human", "0"]:
                                 label = 0
                             else:
-                                label = 1  # Any AI generator mapped to 1
+                                label = 1
                                 
                             examples.append({"text": str(text), "label": int(label)})
                     
@@ -289,7 +277,6 @@ def load_hf_dataset_direct(dataset_name: str, num_samples=None):
                     return []
                     
             finally:
-                # Restore original environment variables
                 if old_cache:
                     os.environ["HF_DATASETS_CACHE"] = old_cache
                 elif "HF_DATASETS_CACHE" in os.environ:
@@ -330,9 +317,9 @@ def evaluate_on_hf_dataset(model, tokenizer, dataset_name: str, num_samples=None
     # Determine batch size based on available GPU memory
     if torch.cuda.is_available():
         gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        if gpu_memory_gb < 16:  # Colab free tier or similar
+        if gpu_memory_gb < 16:
             batch_size = 1
-        elif gpu_memory_gb < 24:  # Colab Pro or mid-range GPU
+        elif gpu_memory_gb < 24:
             batch_size = 2
         else:  # High-end GPU
             batch_size = 4
@@ -351,7 +338,6 @@ def evaluate_on_hf_dataset(model, tokenizer, dataset_name: str, num_samples=None
             predictions.extend(batch_preds)
         except Exception as e:
             logging.error(f"Error in batch {i//batch_size}: {e}")
-            # Add dummy predictions to maintain alignment
             for _ in batch_texts:
                 predictions.append({"predicted_label": 0, "score_ai_generated": 0.5})
     
