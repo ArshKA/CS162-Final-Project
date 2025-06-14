@@ -2,7 +2,6 @@ import torch
 import numpy as np
 from transformers import TrainingArguments, Trainer, EarlyStoppingCallback
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
-# import evaluate
 
 import config
 from data_utils import load_and_preprocess_data
